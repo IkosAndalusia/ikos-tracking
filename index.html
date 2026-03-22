@@ -502,6 +502,14 @@ input:checked+.sw-t::before{transform:translateX(16px);background:#fff}
 .gt-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border-radius:99px;background:var(--bg4);border:1px solid var(--bd);font-size:11px;color:var(--t2);cursor:pointer;transition:all .15s;user-select:none}
 .gt-chip input{display:none}
 .gt-chip:has(input:checked){background:linear-gradient(135deg,var(--blue),var(--blue-hi));border-color:var(--blue-hi);color:#fff;font-weight:600}
+.btn-orange{background:linear-gradient(135deg,var(--orange),#e07b0c);color:#fff;border:none}
+.btn-orange:hover{opacity:.88}
+.reassign-row{background:var(--bg3);border:1px solid var(--bd);border-radius:var(--rs);padding:10px 13px;margin-bottom:8px}
+.reassign-row.urgent{border-color:rgba(239,68,68,.35);background:var(--red-lo)}
+.reassign-agent{font-weight:700;font-size:13px;color:var(--t1);margin-bottom:6px}
+.reassign-task{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--bd);font-size:12px}
+.reassign-task:last-child{border-bottom:none}
+.reassign-task select{flex:1;max-width:180px;font-size:11px;padding:3px 6px}
 /* ─── SOL HELP BOT ─── */
 .sol-btn{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#f97316);border:none;cursor:pointer;box-shadow:0 4px 20px rgba(249,115,22,.5);z-index:5000;display:flex;align-items:center;justify-content:center;font-size:24px;transition:transform .2s,box-shadow .2s;animation:solPulse 4s 3s infinite}
 .sol-btn:hover{transform:scale(1.12);box-shadow:0 6px 28px rgba(249,115,22,.7)}
@@ -1265,6 +1273,21 @@ input:checked+.sw-t::before{transform:translateX(16px);background:#fff}
         <button class="btn btn-sm btn-blue" onclick="renderDailyReport()">🔄 Refresh</button>
         <button class="btn btn-sm" onclick="copyDailyReport()">📋 Copy for WhatsApp</button>
       </div>
+
+      <!-- ── SHIFT REASSIGNMENT PANEL (managers only) ── -->
+      <div class="card" id="shiftReassignCard" style="margin-bottom:14px;border-left:3px solid var(--orange)">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+          <div>
+            <div class="card-title" style="margin:0">🔁 Shift Reassignment</div>
+            <div class="card-sub" style="margin:2px 0 0">Tasks not completed by the morning shift — reassign to afternoon staff</div>
+          </div>
+          <button class="btn btn-sm btn-orange" onclick="renderShiftReassign()">🔄 Scan Incomplete Tasks</button>
+        </div>
+        <div id="shiftReassignContent">
+          <div style="font-size:12px;color:var(--t3)">Click "Scan Incomplete Tasks" to see what needs reassigning for the current shift handover.</div>
+        </div>
+      </div>
+
       <div id="drContent"></div>
     </div>
 
@@ -4565,19 +4588,54 @@ async function solSend() {
 
   _solChatHistory.push({role: 'user', parts: [{text: q}]});
 
-  // Build personalised system prompt with logged-in user context
+  // Build personalised system prompt with logged-in user context + live stats
   let sysPrompt = SOL_SYSTEM_PROMPT;
   if (CURRENT_USER) {
     const msgCount = _solChatHistory.length;
     const isNew = msgCount <= 2;
-    sysPrompt += '\n\nCURRENT USER: ' + CURRENT_USER.name + ' (' + CURRENT_USER.position + ').'
-      + (isNew ? ' This is the start of their session — greet them by first name warmly on the first reply.' : '')
-      + '\nAs the chat progresses, adapt to their style:'
-      + '\n- If they write short/casual → match that energy, keep it punchy'
-      + '\n- If they write detailed/formal → be a bit more thorough'
-      + '\n- If they seem stressed or stuck → validate first, then answer'
-      + '\n- Use their first name occasionally (not every message — just when it feels natural)'
-      + '\n- Remember what they asked earlier in this conversation and build on it';
+    const stats = buildMyStats();
+
+    sysPrompt += '\n\n═══ LIVE DATA FOR ' + CURRENT_USER.name.toUpperCase() + ' (' + (CURRENT_USER.position||'Staff') + ') ═══';
+    sysPrompt += '\nDate: ' + stats.today;
+    sysPrompt += '\n\nTHIS SEASON SO FAR:';
+    sysPrompt += '\n• Check-ins done: ' + stats.totalCheckins;
+    sysPrompt += '\n• Rooms managed (concierge): ' + stats.totalRooms;
+    sysPrompt += '\n• Follow-up calls logged: ' + stats.totalFollowups;
+    sysPrompt += '\n• TA reviews requested: ' + stats.totalTA;
+    sysPrompt += '\n• Courtesy calls done: ' + stats.totalCC;
+    if (stats.avgNPS) sysPrompt += '\n• Personal avg NPS from departure calls: ' + stats.avgNPS;
+
+    sysPrompt += '\n\nTODAY\'S STATUS:';
+    sysPrompt += '\n• Rooms contacted today: ' + stats.contactedToday + '/' + stats.totalRooms;
+    if (stats.notContactedToday.length) {
+      sysPrompt += '\n• NOT contacted yet today: ' + stats.notContactedToday.join(', ');
+    } else {
+      sysPrompt += '\n• All rooms contacted today ✅';
+    }
+    if (stats.dcPending.length) {
+      sysPrompt += '\n• Departure calls PENDING: ' + stats.dcPending.join(', ');
+    } else {
+      sysPrompt += '\n• Departure calls: ' + stats.dcDone + ' completed today';
+    }
+    if (stats.openComplaints.length) {
+      sysPrompt += '\n• OPEN COMPLAINTS assigned to you:';
+      stats.openComplaints.forEach(c => {
+        sysPrompt += '\n  - Room ' + c.room + ' ' + c.guest + ': ' + c.desc + ' [' + c.severity + ']';
+      });
+    } else {
+      sysPrompt += '\n• No open complaints assigned ✅';
+    }
+    if (stats.overdueRooms.length) {
+      sysPrompt += '\n• OVERDUE (2+ days no contact): ' + stats.overdueRooms.join(', ');
+    } else {
+      sysPrompt += '\n• No overdue rooms ✅';
+    }
+
+    sysPrompt += '\n\nIMPORTANT: You DO have access to this person\'s real stats — they are listed above. '
+      + 'When they ask about their stats, check-ins, follow-ups, NPS, complaints or pending tasks, answer using the data above. '
+      + 'Be specific and name the actual numbers and rooms. Hype them up when they\'re doing well!'
+      + (isNew ? '\n\nThis is the start of their session. Greet ' + stats.firstName + ' warmly by first name.' : '')
+      + '\n\nAdapt to their style: short messages = punchy replies. If they seem stressed, validate first.';
   }
 
   try {
@@ -4842,8 +4900,235 @@ function resetGuestTypes() {
   toast('Reset to default labels','inf');
 }
 /* ══════════════════════════════════════
-   DYNAMIC TEAM FILTER for Agent Stats
+   SHIFT REASSIGNMENT ENGINE
+   Managers scan incomplete tasks at 15:00
+   and reassign to afternoon staff
 ══════════════════════════════════════ */
+function renderShiftReassign() {
+  var el = document.getElementById('shiftReassignContent');
+  if (!el) return;
+  var today = propToday();
+  var allG = gs();
+
+  // Build incomplete tasks grouped by the staff member responsible
+  // Key: staff name → {followups:[], complaints:[], dcCalls:[]}
+  var byStaff = {};
+
+  function ensureStaff(name) {
+    if (!name || nm(name).length < 2) return;
+    var k = nm(name);
+    if (!byStaff[k]) byStaff[k] = {name: name, followups:[], complaints:[], dcCalls:[]};
+    return k;
+  }
+
+  // 1. Concierge rooms not contacted today
+  allG.filter(function(g){ return isInHouse(g) && conName(g); }).forEach(function(g) {
+    var contacted = !!(g.dailyContacts||{})[today];
+    if (!contacted) {
+      var k = ensureStaff(conName(g));
+      if (k) byStaff[k].followups.push({
+        id: g.id, room: g.room, guest: g.guestName,
+        types: getGuestTypes(g),
+        label: 'Room ' + g.room + ' — ' + g.guestName
+          + (getGuestTypes(g).length ? ' ' + guestTypeIcon(g) : '')
+      });
+    }
+  });
+
+  // 2. Departure calls pending today
+  allG.forEach(function(g) {
+    (g.departureCalls||[]).forEach(function(dc) {
+      if (dc.createdAt === today && dc.status === 'pending' && dc.caller) {
+        var k = ensureStaff(dc.caller);
+        if (k) byStaff[k].dcCalls.push({
+          gid: g.id, dcId: dc.id,
+          label: 'Departure call — Room ' + g.room + ' ' + g.guestName
+        });
+      }
+    });
+  });
+
+  // 3. Open complaints assigned to morning staff
+  allG.forEach(function(g) {
+    (g.complaints||[]).forEach(function(c) {
+      if (c.assignedTo && c.status !== 'resolved') {
+        var k = ensureStaff(c.assignedTo);
+        if (k) byStaff[k].complaints.push({
+          gid: g.id, cid: c.id, severity: c.severity,
+          label: 'Complaint — Room ' + g.room + ' ' + g.guestName
+            + (c.severity === 'difficult' ? ' 🚨' : '')
+        });
+      }
+    });
+  });
+
+  var staffList = Object.values(byStaff).filter(function(s) {
+    return s.followups.length || s.complaints.length || s.dcCalls.length;
+  });
+
+  if (!staffList.length) {
+    el.innerHTML = '<div class="sol-tip">✅ All tasks are completed or assigned — no reassignment needed for this shift!</div>';
+    return;
+  }
+
+  // Get all users for the reassign dropdown
+  var allUsers = getAllUsers().filter(function(u){ return u.id !== 'ian'; });
+  var userOpts = allUsers.map(function(u) {
+    return '<option value="' + escHtml(u.name) + '">' + escHtml(u.name) + '</option>';
+  }).join('');
+
+  var totalTasks = staffList.reduce(function(a,s){ return a+s.followups.length+s.complaints.length+s.dcCalls.length; }, 0);
+
+  var html = '<div style="font-size:12px;color:var(--amber);font-weight:600;margin-bottom:10px">'
+    + '⚠️ ' + totalTasks + ' incomplete task(s) across ' + staffList.length + ' staff member(s) — reassign to afternoon shift below:</div>';
+
+  staffList.forEach(function(s) {
+    var isUrgent = s.complaints.some(function(c){ return c.severity==='difficult'; });
+    html += '<div class="reassign-row' + (isUrgent?' urgent':'') + '">';
+    html += '<div class="reassign-agent">' + escHtml(s.name)
+      + ' <span style="font-size:10px;font-weight:400;color:var(--t3)">('
+      + [s.followups.length?s.followups.length+' follow-up(s)':'',
+         s.dcCalls.length?s.dcCalls.length+' departure call(s)':'',
+         s.complaints.length?s.complaints.length+' complaint(s)':'']
+        .filter(Boolean).join(', ') + ')</span></div>';
+
+    // Follow-ups
+    s.followups.forEach(function(t) {
+      html += '<div class="reassign-task">'
+        + '<span style="flex:1;color:var(--t2)">📋 ' + escHtml(t.label) + '</span>'
+        + '<select class="field-select" style="width:170px;font-size:11px;padding:3px 6px" id="ra_fu_' + t.id + '">'
+        + '<option value="">— Reassign to —</option>' + userOpts + '</select>'
+        + '<button class="btn btn-sm btn-blue" onclick="reassignFollowup(\'' + t.id + '\')">✓</button>'
+        + '</div>';
+    });
+
+    // Departure calls
+    s.dcCalls.forEach(function(t) {
+      html += '<div class="reassign-task">'
+        + '<span style="flex:1;color:var(--t2)">📞 ' + escHtml(t.label) + '</span>'
+        + '<select class="field-select" style="width:170px;font-size:11px;padding:3px 6px" id="ra_dc_' + t.gid + '_' + t.dcId + '">'
+        + '<option value="">— Reassign to —</option>' + userOpts + '</select>'
+        + '<button class="btn btn-sm btn-blue" onclick="reassignDC(\'' + t.gid + '\',\'' + t.dcId + '\')">✓</button>'
+        + '</div>';
+    });
+
+    // Complaints
+    s.complaints.forEach(function(t) {
+      html += '<div class="reassign-task">'
+        + '<span style="flex:1;color:' + (t.severity==='difficult'?'var(--red)':'var(--t2)') + '">'
+        + '⚠️ ' + escHtml(t.label) + '</span>'
+        + '<select class="field-select" style="width:170px;font-size:11px;padding:3px 6px" id="ra_cmp_' + t.gid + '_' + t.cid + '">'
+        + '<option value="">— Reassign to —</option>' + userOpts + '</select>'
+        + '<button class="btn btn-sm btn-blue" onclick="reassignComplaint(\'' + t.gid + '\',\'' + t.cid + '\')">✓</button>'
+        + '</div>';
+    });
+
+    html += '</div>';
+  });
+
+  html += '<button class="btn btn-blue" style="margin-top:10px;width:100%;justify-content:center" onclick="reassignAll()">⚡ Reassign All Selected</button>';
+  el.innerHTML = html;
+}
+
+function reassignFollowup(gid) {
+  var sel = document.getElementById('ra_fu_' + gid);
+  if (!sel || !sel.value) { toast('Choose a staff member first','wrn'); return; }
+  var newAgent = sel.value;
+  var g = gs().find(function(g){ return g.id===gid; });
+  if (!g) return;
+  // Update concierge field to new agent
+  g.concierge = newAgent;
+  persist(); refresh();
+  sel.closest('.reassign-task').innerHTML = '<span style="color:var(--green);font-size:12px">✅ Follow-up reassigned to ' + escHtml(newAgent) + '</span>';
+  toast('Follow-up for Room ' + g.room + ' reassigned to ' + newAgent, 'ok');
+}
+
+function reassignDC(gid, dcId) {
+  var sel = document.getElementById('ra_dc_' + gid + '_' + dcId);
+  if (!sel || !sel.value) { toast('Choose a staff member first','wrn'); return; }
+  var newAgent = sel.value;
+  var g = gs().find(function(g){ return g.id===gid; });
+  if (!g) return;
+  var dc = (g.departureCalls||[]).find(function(d){ return d.id===dcId; });
+  if (!dc) return;
+  dc.caller = newAgent;
+  persist();
+  sel.closest('.reassign-task').innerHTML = '<span style="color:var(--green);font-size:12px">✅ Departure call reassigned to ' + escHtml(newAgent) + '</span>';
+  toast('Departure call for Room ' + g.room + ' reassigned to ' + newAgent, 'ok');
+}
+
+function reassignComplaint(gid, cid) {
+  var sel = document.getElementById('ra_cmp_' + gid + '_' + cid);
+  if (!sel || !sel.value) { toast('Choose a staff member first','wrn'); return; }
+  var newAgent = sel.value;
+  var g = gs().find(function(g){ return g.id===gid; });
+  if (!g) return;
+  var c = (g.complaints||[]).find(function(c){ return c.id===cid; });
+  if (!c) return;
+  c.assignedTo = newAgent;
+  if (c.status === 'open') c.status = 'assigned';
+  persist(); updateComplaintsBadge();
+  sel.closest('.reassign-task').innerHTML = '<span style="color:var(--green);font-size:12px">✅ Complaint reassigned to ' + escHtml(newAgent) + '</span>';
+  toast('Complaint for Room ' + g.room + ' reassigned to ' + newAgent, 'ok');
+}
+
+function reassignAll() {
+  // Find all reassign selects and process each that has a value selected
+  var reassigned = 0;
+  document.querySelectorAll('[id^="ra_fu_"]').forEach(function(sel) {
+    if (sel.value) { var gid = sel.id.replace('ra_fu_',''); reassignFollowup(gid); reassigned++; }
+  });
+  document.querySelectorAll('[id^="ra_dc_"]').forEach(function(sel) {
+    if (sel.value) {
+      var parts = sel.id.replace('ra_dc_','').split('_');
+      reassignDC(parts[0], parts[1]); reassigned++;
+    }
+  });
+  document.querySelectorAll('[id^="ra_cmp_"]').forEach(function(sel) {
+    if (sel.value) {
+      var parts = sel.id.replace('ra_cmp_','').split('_');
+      reassignComplaint(parts[0], parts[1]); reassigned++;
+    }
+  });
+  if (reassigned === 0) toast('No reassignments selected — choose staff members first','wrn');
+  else toast(reassigned + ' task(s) reassigned successfully ✓','ok');
+}
+
+// Auto-alert managers at 15:30 that it's shift handover time
+function checkShiftHandoverTime() {
+  if (!CURRENT_USER) return;
+  var canManage = CURRENT_USER.isManager || CURRENT_USER.isSuperUser;
+  if (!canManage) return;
+  var now = new Date();
+  var h = now.getHours(), m = now.getMinutes();
+  if (h === 15 && m >= 30 && m < 35) {
+    var today = propToday();
+    var lastAlertKey = 'shift_alert_' + today;
+    if (localStorage.getItem(lastAlertKey)) return; // already alerted today
+    localStorage.setItem(lastAlertKey, '1');
+
+    // Count incomplete tasks
+    var incomplete = 0;
+    gs().forEach(function(g) {
+      if (isInHouse(g) && conName(g) && !(g.dailyContacts||{})[today]) incomplete++;
+      (g.departureCalls||[]).forEach(function(dc){ if(dc.createdAt===today&&dc.status==='pending') incomplete++; });
+      (g.complaints||[]).forEach(function(c){ if(c.status!=='resolved') incomplete++; });
+    });
+
+    if (incomplete > 0) {
+      toast('🔁 15:30 — Shift Handover! ' + incomplete + ' task(s) need reassigning', 'wrn');
+      solSendNotif('Shift Handover — ' + CURRENT_USER.name.split(' ')[0],
+        incomplete + ' incomplete task(s) need reassigning for afternoon shift.',
+        function() { nav('dailyreport'); });
+      // Flash the daily report nav
+      var navItem = document.querySelector('[data-page="dailyreport"]');
+      if (navItem) { navItem.style.animation = 'none'; navItem.style.background = 'var(--orange-lo)'; }
+    }
+  }
+}
+
+// Run shift handover check every minute
+setInterval(checkShiftHandoverTime, 60000);
 function populateTeamFilter() {
   const sel = document.getElementById('agTeamF');
   if (!sel) return;
@@ -5093,39 +5378,17 @@ function solLoadMemory() {
     const raw = localStorage.getItem('sol_mem_'+CURRENT_USER.id);
     if (!raw) return;
     const d = JSON.parse(raw);
-    // Only restore if within last 8 hours (same shift)
     if (Date.now() - d.ts < 8*3600*1000) {
       const hist = d.history || [];
-      // Drop history if it contains API errors (stale/broken session)
-      const hasError = hist.some(m => {
+      // Drop history containing any API errors
+      const hasError = hist.some(function(m) {
         const txt = (m.parts&&m.parts[0]&&m.parts[0].text)||'';
-        return txt.includes('gemini-1.5') || txt.includes('not found for API') || txt.includes('quota') || txt.includes('ListModels');
+        return txt.includes('gemini') || txt.includes('not found for API') || txt.includes('quota')
+          || txt.includes('ListModels') || txt.includes('connection') || txt.includes('Error:');
       });
-      if (hasError) {
-        localStorage.removeItem('sol_mem_'+CURRENT_USER.id);
-        _solChatHistory = [];
-        return;
-      }
+      if (hasError) { localStorage.removeItem('sol_mem_'+CURRENT_USER.id); _solChatHistory=[]; return; }
+      // Keep history silently for AI context — clean UI every session
       _solChatHistory = hist;
-      // Show chat was restored
-      if (_solChatHistory.length > 0) {
-        setTimeout(() => {
-          const msgs = document.getElementById('solMessages');
-          if (msgs && _solChatHistory.length) {
-            msgs.style.display = 'flex';
-            // Rebuild the chat UI from memory
-            msgs.innerHTML = '<div class="sol-msg bot" style="font-size:10px;opacity:.6;font-style:italic">☀️ picking up where we left off…</div>';
-            _solChatHistory.forEach(m => {
-              const role = m.role === 'user' ? 'user' : 'bot';
-              const txt = (m.parts&&m.parts[0]&&m.parts[0].text)||'';
-              msgs.innerHTML += '<div class="sol-msg ' + role + '">' + escHtml(txt).replace(/\n/g,'<br>') + '</div>';
-            });
-            document.getElementById('solMenu').style.display = 'none';
-            document.getElementById('solChatToggle').style.display = 'block';
-            msgs.scrollTop = msgs.scrollHeight;
-          }
-        }, 500);
-      }
     } else {
       _solChatHistory = [];
       localStorage.removeItem('sol_mem_'+CURRENT_USER.id);
@@ -5154,61 +5417,220 @@ function solSendNotif(title, body, onClick) {
   if (onClick) n.onclick = onClick;
 }
 
-function solCheckTasks() {
+/* ══════════════════════════════════════
+   SOL PERSONAL STATS — builds a real-time
+   snapshot of the logged-in user's data
+══════════════════════════════════════ */
+/* ══════════════════════════════════════
+   SOL PERSONAL STATS
+══════════════════════════════════════ */
+function buildMyStats() {
+  if (!CURRENT_USER) return null;
+  var myName = nm(CURRENT_USER.name);
+  var firstName = CURRENT_USER.name.split(' ')[0];
+  var matchMe = function(n) {
+    var k = nm(n||'');
+    return k===myName || myName.startsWith(k) || k.startsWith(nm(firstName));
+  };
+  var today = propToday();
+  var allG = gs();
+
+  var myCheckins    = allG.filter(function(g){ return matchMe(g.checkedInBy); });
+  var myRooms       = allG.filter(function(g){ return isInHouse(g) && matchMe(conName(g)); });
+  var myFollowups=0, myTA=0, myCC=0;
+  allG.forEach(function(g){
+    Object.values(g.dailyContacts||{}).forEach(function(dc){
+      if (matchMe(dc.agent)){ myFollowups++; if(dc.ta)myTA++; if(dc.cc)myCC++; }
+    });
+  });
+
+  var contactedToday    = myRooms.filter(function(g){ return !!(g.dailyContacts||{})[today]; });
+  var notContactedToday = myRooms.filter(function(g){ return !(g.dailyContacts||{})[today]; });
+
+  var myDCPending=[], myDCDone=[];
+  allG.forEach(function(g){
+    (g.departureCalls||[]).forEach(function(dc){
+      if (dc.createdAt===today && matchMe(dc.caller)) {
+        if (dc.status==='contacted') myDCDone.push({nps:dc.nps,room:g.room,guest:g.guestName});
+        else myDCPending.push({room:g.room,guest:g.guestName});
+      }
+    });
+  });
+
+  var npsArr = myDCDone.filter(function(d){ return d.nps!=null; });
+  var myAvgNPS = npsArr.length ? (npsArr.reduce(function(a,d){return a+d.nps;},0)/npsArr.length).toFixed(1) : null;
+
+  var myComplaints=[];
+  allG.forEach(function(g){
+    (g.complaints||[]).forEach(function(c){
+      if (matchMe(c.assignedTo) && c.status!=='resolved')
+        myComplaints.push({room:g.room,guest:g.guestName,desc:c.description.slice(0,50),severity:c.severity});
+    });
+  });
+
+  var myOverdue = myRooms.filter(function(g){
+    var days=Object.keys(g.dailyContacts||{});
+    if(!days.length) return true;
+    var last=days.sort().pop();
+    return Math.floor((new Date(today)-new Date(last))/(864e5))>=2;
+  });
+
+  return {
+    firstName:firstName, name:CURRENT_USER.name, position:CURRENT_USER.position||'', today:today,
+    totalCheckins:myCheckins.length, totalRooms:myRooms.length,
+    totalFollowups:myFollowups, totalTA:myTA, totalCC:myCC,
+    contactedToday:contactedToday.length,
+    notContactedToday:notContactedToday.map(function(g){return 'Room '+g.room+' '+g.guestName;}),
+    dcPending:myDCPending.map(function(d){return 'Room '+d.room+' '+d.guest;}),
+    dcDone:myDCDone.length, avgNPS:myAvgNPS,
+    openComplaints:myComplaints,
+    overdueRooms:myOverdue.map(function(g){return 'Room '+g.room+' '+g.guestName;})
+  };
+}
+
+/* ══════════════════════════════════════
+   SOL AUTO-GREET on login
+   Opens Sol panel and delivers
+   personalised daily task briefing
+══════════════════════════════════════ */
+function solAutoGreet() {
   if (!CURRENT_USER) return;
-  const myName = nm(CURRENT_USER.name);
-  const matchMe = n => { const k=nm(n||''); return k===myName||myName.startsWith(k)||k.startsWith(nm(CURRENT_USER.name.split(' ')[0])); };
-  const today = propToday();
-  const alerts = [];
+  var stats = buildMyStats();
+  if (!stats) return;
 
-  // Pending departure calls
-  gs().forEach(g => {
-    (g.departureCalls||[]).forEach(dc => {
-      if (dc.createdAt===today && matchMe(dc.caller) && dc.status==='pending') {
-        alerts.push('📞 Departure call pending: Room ' + g.room + ' ' + g.guestName);
-      }
-    });
-  });
+  // Open Sol panel
+  _solOpen = true;
+  var panel = document.getElementById('solPanel');
+  if (panel) panel.classList.add('open');
 
-  // Open complaints assigned to me
-  gs().forEach(g => {
-    (g.complaints||[]).forEach(c => {
-      if (matchMe(c.assignedTo) && c.status!=='resolved') {
-        alerts.push('⚠️ Open complaint: Room ' + g.room + ' — ' + c.description.slice(0,40));
-      }
-    });
-  });
+  // Show messages area, hide menu
+  var msgs = document.getElementById('solMessages');
+  var menu = document.getElementById('solMenu');
+  if (!msgs || !menu) return;
+  menu.style.display = 'none';
+  msgs.style.display = 'flex';
+  msgs.innerHTML = '';
+  var toggle = document.getElementById('solChatToggle');
+  if (toggle) toggle.style.display = 'block';
 
-  // Concierge guests with no contact
-  gs().filter(g => isInHouse(g) && matchMe(conName(g))).forEach(g => {
-    if (!(g.dailyContacts||{})[today]) {
-      alerts.push('📋 No follow-up yet: Room ' + g.room + ' ' + g.guestName);
+  // Build greeting based on hour
+  var h = new Date().getHours();
+  var greeting = h < 12 ? 'gm' : h < 18 ? 'hey' : 'good evening';
+
+  // Build the briefing message
+  var lines = [];
+  lines.push(greeting + ' ' + stats.firstName + '! ☀️ here\'s your briefing for today:');
+  lines.push('');
+
+  // All clear check
+  var allClear = !stats.dcPending.length && !stats.openComplaints.length
+    && !stats.notContactedToday.length && !stats.overdueRooms.length;
+
+  if (allClear) {
+    lines.push('✅ you\'re all clear! no pending tasks right now.');
+    lines.push('');
+    if (stats.totalCheckins > 0) lines.push('this season: ' + stats.totalCheckins + ' check-in(s) · ' + stats.totalFollowups + ' follow-up(s) · ' + stats.totalTA + ' TA request(s)');
+    if (stats.avgNPS) lines.push('your avg NPS: ' + stats.avgNPS + ' — keep it up! 🏆');
+    lines.push('');
+    lines.push('tap a guide or ask me anything ☀️');
+  } else {
+    // Departure calls
+    if (stats.dcPending.length) {
+      lines.push('📞 DEPARTURE CALLS (' + stats.dcPending.length + ' pending):');
+      stats.dcPending.forEach(function(r) { lines.push('   › ' + r); });
+      lines.push('');
     }
-  });
-
-  // Prime time alert 17:00-18:00
-  const h = new Date().getHours();
-  if (h >= 17 && h < 18) {
-    const pendingDC = gs().reduce((acc,g) => acc + (g.departureCalls||[]).filter(dc=>dc.createdAt===today&&matchMe(dc.caller)&&dc.status==='pending').length, 0);
-    if (pendingDC > 0) {
-      solSendNotif('☀️ Sol — Prime Time!', 'It\'s 17:00 — best time for departure calls. You have ' + pendingDC + ' pending!', () => nav('departurecalls'));
+    // Open complaints
+    if (stats.openComplaints.length) {
+      lines.push('⚠️ OPEN COMPLAINTS (' + stats.openComplaints.length + ' assigned to you):');
+      stats.openComplaints.forEach(function(c) {
+        lines.push('   › Room ' + c.room + ' ' + c.guest + (c.severity==='difficult'?' 🚨 DIFFICULT':''));
+      });
+      lines.push('');
     }
+    // Not contacted today
+    if (stats.notContactedToday.length) {
+      lines.push('📋 FOLLOW-UPS NEEDED TODAY (' + stats.notContactedToday.length + ' rooms):');
+      stats.notContactedToday.forEach(function(r) { lines.push('   › ' + r); });
+      lines.push('');
+    }
+    // Overdue
+    if (stats.overdueRooms.length) {
+      lines.push('🚨 OVERDUE (2+ days no contact):');
+      stats.overdueRooms.forEach(function(r) { lines.push('   › ' + r); });
+      lines.push('');
+    }
+    // Season stats mini-summary
+    if (stats.totalCheckins > 0 || stats.totalFollowups > 0) {
+      lines.push('your season so far: ' + stats.totalCheckins + ' check-in(s) · ' + stats.totalFollowups + ' follow-up(s) · ' + stats.totalTA + ' TA(s)');
+      if (stats.avgNPS) lines.push('personal avg NPS: ' + stats.avgNPS);
+      lines.push('');
+    }
+    lines.push('ask me anything or tap a guide — you\'ve got this! 💅');
   }
 
-  // Morning briefing 09:00
+  // Display message with typing effect
+  var fullText = lines.join('\n');
+  var typingId = 'sol-auto-' + Date.now();
+  msgs.innerHTML = '<div class="sol-msg bot" id="' + typingId + '" style="border-left:3px solid #f97316;white-space:pre-line">'
+    + escHtml(fullText) + '</div>';
+  msgs.scrollTop = msgs.scrollHeight;
+
+  // Add to history so Sol remembers the briefing was given
+  _solChatHistory.push({role:'model', parts:[{text: fullText}]});
+}
+
+function solCheckTasks() {
+  if (!CURRENT_USER) return [];
+  var stats = buildMyStats();
+  if (!stats) return [];
+  var h = new Date().getHours();
+  var alerts = [];
+
+  if (stats.dcPending.length) { alerts.push('Departure calls pending: ' + stats.dcPending.join(', ')); }
+  stats.openComplaints.forEach(function(c) { alerts.push('Complaint Room ' + c.room + ': ' + c.desc); });
+  if (stats.notContactedToday.length) { alerts.push('Not contacted today: ' + stats.notContactedToday.join(', ')); }
+  if (stats.overdueRooms.length) { alerts.push('Overdue: ' + stats.overdueRooms.join(', ')); }
+
+  if (h >= 17 && h < 18 && stats.dcPending.length > 0) {
+    solSendNotif('Sol - Prime Time ' + stats.firstName, stats.dcPending.length + ' departure call(s) pending!', function(){ nav('departurecalls'); });
+    var pmsg = 'prime time 17:00-18:00! ' + stats.dcPending.length + ' call(s) pending: ' + stats.dcPending.slice(0,2).join(', ');
+    if (stats.dcPending.length > 2) pmsg += ' + ' + (stats.dcPending.length-2) + ' more';
+    pmsg += '. go get that NPS! ';
+    solShowInPanelReminder(pmsg);
+  }
+
   if (h === 9 && alerts.length > 0) {
-    solSendNotif('☀️ Sol — Good morning ' + CURRENT_USER.name.split(' ')[0] + '!',
-      'You have ' + alerts.length + ' tasks today. Open IAN to see your full list.',
-      () => { nav('dashboard'); toggleSol(); }
-    );
+    solSendNotif('Good morning ' + stats.firstName, alerts.length + ' tasks today.', function(){ nav('dashboard'); toggleSol(); });
+    var brief = 'gm ' + stats.firstName + '! morning briefing: ';
+    if (stats.dcPending.length) brief += stats.dcPending.length + ' departure call(s) pending. ';
+    if (stats.openComplaints.length) brief += stats.openComplaints.length + ' complaint(s) assigned. ';
+    if (stats.notContactedToday.length) brief += stats.notContactedToday.length + ' room(s) to follow up. ';
+    if (stats.overdueRooms.length) brief += stats.overdueRooms.length + ' overdue. ';
+    brief += 'ask me anything or tap a guide!';
+    solShowInPanelReminder(brief);
   }
 
-  // Show in-app toast for critical items when panel is closed
-  if (!_solOpen && alerts.length > 0) {
-    const criticals = alerts.filter(a => a.includes('DETRACTOR') || a.includes('complaint') || a.includes('Detractor'));
-    if (criticals.length > 0) toast('☀️ Sol: ' + criticals[0], 'wrn');
+  if (stats.overdueRooms.length > 0) {
+    solSendNotif(stats.firstName + ' - Overdue Rooms', stats.overdueRooms.length + ' room(s) not contacted 2+ days.', function(){ nav('overdue'); });
+  }
+
+  if (!_solOpen) {
+    var diff = stats.openComplaints.filter(function(c){ return c.severity === 'difficult'; });
+    if (diff.length > 0) toast('Sol: Difficult complaint - Room ' + diff[0].room, 'wrn');
   }
   return alerts;
+}
+
+function solShowInPanelReminder(text) {
+  if (!_solOpen) return;
+  const msgs = document.getElementById('solMessages');
+  if (!msgs) return;
+  msgs.style.display = 'flex';
+  document.getElementById('solMenu').style.display = 'none';
+  document.getElementById('solChatToggle').style.display = 'block';
+  msgs.innerHTML += '<div class="sol-msg bot" style="border-left:3px solid #f97316">' + escHtml(text).replace(/\n/g,'<br>') + '</div>';
+  msgs.scrollTop = msgs.scrollHeight;
 }
 
 function solStartNotifications() {
@@ -5897,6 +6319,11 @@ function doLogin() {
   loadHandover();
   setTimeout(showSplashNow, 300);
   toast(`Welcome back, ${match.name.split(' ')[0]}! 👋`, 'ok');
+
+  // Sol auto-popup: 5 seconds after login, show personalised daily briefing
+  setTimeout(function() {
+    solAutoGreet();
+  }, 5000);
 }
 
 function doLogout() {
