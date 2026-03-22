@@ -6915,14 +6915,19 @@ sv('fu_date','2026-03-26');
 autoConnectFirebase();
 
 // ── Welcome splash ────────────────────────────────────
-// Wrapped in DOMContentLoaded so HTML elements exist when JS runs
 document.addEventListener('DOMContentLoaded', function() {
-  // If not logged in, hide splash immediately and show login screen
   if (!CURRENT_USER) {
-    hideSplash();
+    // Not logged in — hide the splash overlay
+    var overlay = document.getElementById('splashOverlay');
+    if (overlay) overlay.style.display = 'none';
     return;
   }
+  // Logged in — show splash, Sol opens after it finishes via hideSplash()
   showSplashNow();
+  // Guaranteed fallback: Sol opens 7s after page load no matter what
+  setTimeout(function() {
+    if (!_solOpen) solAutoGreet();
+  }, 7000);
 });
 
 function showSplashNow() {
